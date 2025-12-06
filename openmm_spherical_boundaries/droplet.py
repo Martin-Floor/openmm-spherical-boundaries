@@ -1,4 +1,7 @@
-"""Utility for building a standalone spherical water droplet."""
+"""Utility for building a standalone spherical water droplet.
+
+See :mod:`openmm_spherical_boundaries.analysis.metrics` for the accompanying analysis plan.
+"""
 
 from __future__ import annotations
 

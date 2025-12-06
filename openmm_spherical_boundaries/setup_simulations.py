@@ -6,12 +6,14 @@ Example:
         simulation_folder="runs",
         variants=[{"radius": r} for r in (2.0, 2.5, 3.0)],
         base_params={"equil_ns": 1.0, "prod_ns": 5.0},
+        replicas=3,
     )
     for cmd in commands:
         print(cmd)
 
 This prepares per-variant folders, writes a params.json, and emits ready-to-run
-commands that call ``scripts/run_droplet.py``.
+commands that call ``scripts/run_droplet.py``.  Pass ``replicas`` to create multiple
+subdirectories per parameter set (e.g., replica-01, replica-02).
 """
 
 from __future__ import annotations
@@ -42,6 +44,8 @@ def setup_droplet_jobs(
     variants: Sequence[Mapping[str, Any]],
     base_params: Mapping[str, Any] | None = None,
     overwrite: bool = True,
+    *,
+    replicas: int = 1,
 ) -> list[str]:
     """Prepare per-variant folders and commands for droplet runs.
 
@@ -50,12 +54,15 @@ def setup_droplet_jobs(
         variants: Sequence of mappings with the varying parameters for each job.
         base_params: Common parameters applied to every job (overridden by variants).
         overwrite: If True, existing job folders are deleted and recreated (default: True).
+        replicas: Number of replicas to create per parameter set (default: 1).
 
     Returns:
         List of shell command strings (one per job), ready to run.
     """
 
     base_params = dict(base_params or {})
+    if replicas < 1:
+        raise ValueError("replicas must be at least 1")
     root = Path(simulation_folder)
     root.mkdir(parents=True, exist_ok=True)
 
@@ -76,17 +83,50 @@ def setup_droplet_jobs(
 
         if job_path.exists():
             if overwrite:
-                LOGGER.info("Reusing existing job folder %s (overwriting config/outputs)", job_path)
+                LOGGER.info("Clearing existing job folder %s", job_path)
+                shutil.rmtree(job_path)
             else:
                 raise FileExistsError(f"Job folder already exists and overwrite=False: {job_path}")
-        else:
-            job_path.mkdir(parents=True, exist_ok=True)
+        job_path.mkdir(parents=True, exist_ok=True)
 
-        command = _build_command(job_params, cwd=job_path, script_path=dest_script)
+        commands.extend(
+            _write_replica_jobs(
+                job_path=job_path,
+                job_params=job_params,
+                replicas=replicas,
+                script_path=dest_script,
+            )
+        )
 
-        params_path = job_path / "params.json"
+    return commands
+
+
+def _write_replica_jobs(
+    job_path: Path,
+    job_params: Mapping[str, Any],
+    replicas: int,
+    script_path: Path,
+) -> list[str]:
+    """Write params.json/commands for each replica under the provided job path."""
+
+    commands: list[str] = []
+    for replica_index in range(replicas):
+        replica_label = f"replica-{replica_index + 1:02d}"
+        replica_path = job_path / replica_label
+        replica_path.mkdir(parents=True, exist_ok=True)
+
+        command = _build_command(job_params, cwd=replica_path, script_path=script_path)
+
+        payload: dict[str, Any] = {
+            "params": job_params,
+            "command": command,
+            "replica_index": replica_index,
+            "replica_label": replica_label,
+        }
+
+        params_path = replica_path / "params.json"
         with params_path.open("w") as handle:
-            json.dump({"params": job_params, "command": command}, handle, indent=2)
+            json.dump(payload, handle, indent=2)
 
         commands.append(command)
 
